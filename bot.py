@@ -179,7 +179,6 @@ def handle_sections(message):
     section = message.text
     state = USER_STATE[uid]
     
-    # جلب الملفات المرفوعة من التلجرام المخزنة بقاعدة البيانات لهذا القسم
     conn = sqlite3.connect("committee.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -199,7 +198,6 @@ def handle_sections(message):
         
     bot.send_message(message.chat.id, f"📥 ملفات {section} المتاحة حالياً:\n(اضغط على الملف للتحميل المباشر)", reply_markup=markup)
 
-# معالجة الضغط على أزرار تحميل الملفات المباشر وتحديث العداد للإحصائيات
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dl_"))
 def download_file_callback(call):
     file_db_id = call.data.split("_")[1]
@@ -215,7 +213,6 @@ def download_file_callback(call):
         conn.close()
         
         bot.answer_callback_query(call.id, text=f"جاري جلب: {fname}")
-        # إرسال الملف الأصلي المحفوظ داخل سيرفر تلجرام نفسه مباشرة للطالب دون إعادة رفعه
         try:
             bot.send_document(call.message.chat.id, file_id, caption=f"📄 {fname}\n اللجنة العلمية - قنوات الكلية")
         except Exception as e:
@@ -243,7 +240,6 @@ def admin_panel(message):
     
     bot.send_message(message.chat.id, "⚙️ مرحباً بك في غرفة التحكم المتقدمة للجنة العلمية. اختر الإجراء المطلوب:", reply_markup=markup)
 
-# --- تفعيل وضع الصيانة ---
 @bot.message_handler(func=lambda m: m.text == "🔧 تفعيل/إلغاء الصيانة" and is_admin(m.from_user.id))
 def toggle_maintenance(message):
     global MAINTENANCE_MODE
@@ -254,7 +250,6 @@ def toggle_maintenance(message):
     status = "🔴 (مفعّل الآن - البوت مغلق للطلاب)" if MAINTENANCE_MODE else "🟢 (معطل الآن - البوت متاح للجميع)"
     bot.reply_to(message, f"🛠️ وضع الصيانة الحالي للبوت: {status}")
 
-# --- آلية رفع وتحويل الملفات من القناة وحفظ الـ File ID ---
 @bot.message_handler(func=lambda m: m.text == "📥 رفع وتحويل الملفات للقسم" and is_admin(m.from_user.id))
 def start_upload_flow(message):
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -295,7 +290,6 @@ def upload_process_final(message, level, semester, course, section):
         file_id = message.document.file_id
         file_name = message.document.file_name
         
-        # حفظ البيانات داخل الـ SQLite
         conn = sqlite3.connect("committee.db")
         cursor = conn.cursor()
         cursor.execute("""
@@ -309,7 +303,6 @@ def upload_process_final(message, level, semester, course, section):
     else:
         bot.send_message(message.chat.id, "❌ خطأ، لم تقم بإرسال أو تحويل ملف مستند (Document)، يرجى إعادة الإجراء بشكل صحيح عبر لوحة التحكم.", reply_markup=main_menu())
 
-# --- عمليات الإشراف المتكاملة ---
 @bot.message_handler(func=lambda m: m.text == "👤 إضافة مشرف جديد" and is_admin(m.from_user.id))
 def add_admin_flow(message):
     msg = bot.send_message(message.chat.id, "قم بإرسال الـ ID الرقمي للمشرف الجديد المراد ضمه للجنة العلمية:")
@@ -347,7 +340,6 @@ def process_remove_admin(message):
     except:
         bot.reply_to(message, "❌ لم تنجح العملية. يرجى كتابة أرقام فقط.")
 
-# --- حذف ملف واحد / متعدد من داخل القسم ---
 @bot.message_handler(func=lambda m: m.text == "🗑️ حذف ملف واحد" and is_admin(m.from_user.id))
 def start_delete_file(message):
     msg = bot.send_message(message.chat.id, "✍️ اكتب الاسم الدقيق للملف المراد مسحه تماماً من البوت:")
@@ -362,7 +354,6 @@ def process_delete_file(message):
     conn.close()
     bot.reply_to(message, f"🗑️ تم معالجة الطلب ومسح أي ملف باسم: '{fname}' من جداول العرض الشجرية بنجاح.")
 
-# --- خيارات النقل الذكي بين المقررات والأقسام ---
 @bot.message_handler(func=lambda m: m.text == "🔀 نقل ملف بين المقررات" and is_admin(m.from_user.id))
 def start_move_file(message):
     msg = bot.send_message(message.chat.id, "✍️ اكتب الاسم الدقيق للملف المراد نقله:")
@@ -382,7 +373,6 @@ def process_move_file_final(message, fname):
     conn.close()
     bot.reply_to(message, f"🔀 تم نقل الملف '{fname}' بنجاح إلى تبويب مقرر '{new_course}'.")
 
-# --- الإحصائيات الحقيقية المعتمدة على استعلامات قاعدة البيانات ---
 @bot.message_handler(func=lambda m: m.text == "📊 إحصائيات التحميل" and is_admin(m.from_user.id))
 def show_real_stats(message):
     conn = sqlite3.connect("committee.db")
@@ -400,7 +390,6 @@ def show_real_stats(message):
         
     bot.send_message(message.chat.id, stats_text, parse_mode="Markdown")
 
-# --- نظام الإشعارات الفورية والمجدولة عبر الزمن ---
 def send_broadcast_to_all(text):
     conn = sqlite3.connect("committee.db")
     cursor = conn.cursor()
@@ -443,121 +432,4 @@ def process_broadcast_schedule_final(message, text):
 if __name__ == "__main__":
     keep_alive()
     print("البوت الأكاديمي المتكامل يعمل بأعلى كفاءة الآن...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
-        try:
-            with open(ADMINS_FILE, "r") as file:
-                return json.load(file)
-        except:
-            return [OWNER_ID]
-    return [OWNER_ID]
-
-def save_admins(admins_list):
-    with open(ADMINS_FILE, "w") as file:
-        json.dump(admins_list, file)
-
-admins = load_admins()
-
-def is_admin(user_id):
-    return user_id in admins
-
-# 2. الأوامر الأساسية
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    if is_admin(user_id):
-        bot.reply_to(message, "أهلاً بك يا مشرف في لوحة تحكم بوت اللجنة العلمية!\nالخيارات المتاحة لك:\n- رفع ملخصات ومحاضرات جديدة.\n- إدارة المحتوى.")
-    else:
-        bot.reply_to(message, "مرحباً بك أيها الطالب في البوت الأكاديمي لقسم الذكاء الاصطناعي. يمكنك هنا تصفح المحاضرات والملخصات المتاحة.")
-
-# 3. أوامر إدارة المشرفين
-@bot.message_handler(commands=['add_admin'])
-def add_admin(message):
-    user_id = message.from_user.id
-    if user_id == OWNER_ID:
-        try:
-            new_admin_id = int(message.text.split()[1])
-            if new_admin_id not in admins:
-                admins.append(new_admin_id)
-                save_admins(admins)
-                bot.reply_to(message, f"تم إضافة المشرف ذو المعرف {new_admin_id} بنجاح إلى اللجنة.")
-            else:
-                bot.reply_to(message, "هذا المستخدم مسجل كمشرف بالفعل.")
-        except (IndexError, ValueError):
-            bot.reply_to(message, "صيغة غير صحيحة. الرجاء إرسال الأمر متبوعاً بالـ ID.\nمثال: /add_admin 987654321")
-    else:
-        bot.reply_to(message, "عذراً، هذا الإجراء مخصص لمالك البوت (Owner) فقط.")
-
-@bot.message_handler(commands=['remove_admin'])
-def remove_admin(message):
-    user_id = message.from_user.id
-    if user_id == OWNER_ID:
-        try:
-            admin_to_remove = int(message.text.split()[1])
-            if admin_to_remove == OWNER_ID:
-                bot.reply_to(message, "لا يمكنك إزالة نفسك كمالك للبوت!")
-            elif admin_to_remove in admins:
-                admins.remove(admin_to_remove)
-                save_admins(admins)
-                bot.reply_to(message, f"تم سحب صلاحيات الإشراف من المعرف {admin_to_remove}.")
-            else:
-                bot.reply_to(message, "هذا المعرف غير موجود في قائمة المشرفين.")
-        except (IndexError, ValueError):
-            bot.reply_to(message, "صيغة غير صحيحة. الرجاء إرسال الأمر متبوعاً بالـ ID.\nمثال: /remove_admin 987654321")
-    else:
-        bot.reply_to(message, "عذراً، هذا الإجراء مخصص لمالك البوت (Owner) فقط.")
-
-# 4. تشغيل البوت والسيرفر معاً
-if __name__ == "__main__":
-    print("جاري تشغيل خادم الويب...")
-    keep_alive()  # تشغيل سيرفر الويب المدمج لخدعة Render مجاناً
-    
-    print("البوت الأكاديمي يعمل الآن...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
-    if is_admin(user_id):
-        bot.reply_to(message, "أهلاً بك يا مشرف في لوحة تحكم بوت اللجنة العلمية!\nالخيارات المتاحة لك:\n- رفع ملخصات ومحاضرات جديدة.\n- إدارة المحتوى.")
-    else:
-        bot.reply_to(message, "مرحباً بك أيها الطالب في البوت الأكاديمي لقسم الذكاء الاصطناعي. يمكنك هنا تصفح المحاضرات والملخصات المتاحة.")
-
-# 3. أوامر إدارة المشرفين (مخصصة للمالك فقط)
-@bot.message_handler(commands=['add_admin'])
-def add_admin(message):
-    user_id = message.from_user.id
-    if user_id == OWNER_ID:
-        try:
-            # استخراج الـ ID من الرسالة
-            new_admin_id = int(message.text.split()[1])
-            if new_admin_id not in admins:
-                admins.append(new_admin_id)
-                save_admins(admins)
-                bot.reply_to(message, f"تم إضافة المشرف ذو المعرف {new_admin_id} بنجاح إلى اللجنة.")
-            else:
-                bot.reply_to(message, "هذا المستخدم مسجل كمشرف بالفعل.")
-        except (IndexError, ValueError):
-            bot.reply_to(message, "صيغة غير صحيحة. الرجاء إرسال الأمر متبوعاً بالـ ID.\nمثال: /add_admin 987654321")
-    else:
-        bot.reply_to(message, "عذراً، هذا الإجراء مخصص لمالك البوت (Owner) فقط.")
-
-@bot.message_handler(commands=['remove_admin'])
-def remove_admin(message):
-    user_id = message.from_user.id
-    if user_id == OWNER_ID:
-        try:
-            admin_to_remove = int(message.text.split()[1])
-            if admin_to_remove == OWNER_ID:
-                bot.reply_to(message, "لا يمكنك إزالة نفسك كمالك للبوت!")
-            elif admin_to_remove in admins:
-                admins.remove(admin_to_remove)
-                save_admins(admins)
-                bot.reply_to(message, f"تم سحب صلاحيات الإشراف من المعرف {admin_to_remove}.")
-            else:
-                bot.reply_to(message, "هذا المعرف غير موجود في قائمة المشرفين.")
-        except (IndexError, ValueError):
-            bot.reply_to(message, "صيغة غير صحيحة. الرجاء إرسال الأمر متبوعاً بالـ ID.\nمثال: /remove_admin 987654321")
-    else:
-        bot.reply_to(message, "عذراً، هذا الإجراء مخصص لمالك البوت (Owner) فقط.")
-
-# 4. تشغيل البوت باستمرار (Polling)
-if __name__ == "__main__":
-    print("البوت الأكاديمي يعمل الآن...")
-    # استخدام infinity_polling لضمان استمرار البوت في العمل عند حدوث أخطاء شبكة
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
