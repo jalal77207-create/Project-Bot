@@ -33,9 +33,9 @@ OWNER_ID = 1084564343
 
 # متغيرات النظام (تُحفظ في الذاكرة المؤقتة أثناء التشغيل)
 MAINTENANCE_MODE = False
-USER_STATE = {}  # لتتبع خطوات المشرفين والطلاب أثناء التنقل والرفع
+USER_STATE = {}  # لتتبع خطوات المشرفين والطلاب
 
-# قوالب هيكلية المواد الثابتة (بناءً على طلبك وصورك)
+# قوالب هيكلية المواد الثابتة
 COURSES_STRUCTURE = {
     "المستوى الأول 📕": {
         "الفصل الدراسي الأول 📘": ["أساسيات برمجة 📘 Programming basics", "تفاضل وتكامل 1 📘 Calculus 1", "الجبر الخطي 📘 Linear algebra", "فيزياء عامة 📘 General Physics", "لغة عربية (1) 📘 Arabic Language (1)", "لغة إنجليزية (1) 📘 English Language (1)", "مهارات حاسوب 📘 Computer skills"],
@@ -51,16 +51,13 @@ COURSES_STRUCTURE = {
 def init_db():
     conn = sqlite3.connect("committee.db")
     cursor = conn.cursor()
-    # جدول المشرفين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             user_id INTEGER PRIMARY KEY,
             role TEXT DEFAULT 'admin'
         )
     """)
-    # جدول المستخدمين (الطلاب) لإرسال الإشعارات
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
-    # جدول الملفات (قاعدة بيانات التلجرام)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +70,6 @@ def init_db():
             downloads_count INTEGER DEFAULT 0
         )
     """)
-    # إضافة المالك كأول مشرف بصلاحية super_admin
     cursor.execute("INSERT OR IGNORE INTO admins (user_id, role) VALUES (?, 'super_admin')", (OWNER_ID,))
     conn.commit()
     conn.close()
@@ -104,16 +100,11 @@ def register_student(user_id):
     conn.commit()
     conn.close()
 
-# --- لوحات المفاتيح والأزرار الشجرية ---
+# --- لوحات المفاتيح ---
 def main_menu():
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("المستوى الأول 📕", "المستوى الثاني 📗")
     markup.add("لوحة تحكم الإدارة ⚙️", "التواصل مع اللجنة 📝")
-    return markup
-
-def back_buttons():
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add("رجوع 🔙", "رجوع للبداية 🏠")
     return markup
 
 # --- 1. قسم معالجة طلبات وتصفح الطلاب ---
@@ -122,6 +113,10 @@ def back_buttons():
 def start_cmd(message):
     if not check_status(message): return
     register_student(message.from_user.id)
+    # تصفير أي حالات سابقة للمستخدم عند ضغط ستارت
+    if message.from_user.id in USER_STATE:
+        USER_STATE[message.from_user.id] = {}
+        
     bot.send_message(message.chat.id, f"أهلاً بك {message.from_user.first_name} 🎉 في بوت اللجنة العلمية لقسم الذكاء الاصطناعي وعلوم البيانات (AIDS)!\nتصفح المواد بسلاسة من الأزرار بالأسفل👇", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda m: m.text in ["المستوى الأول 📕", "المستوى الثاني 📗", "رجوع للبداية 🏠"])
@@ -221,7 +216,7 @@ def download_file_callback(call):
         conn.close()
         bot.answer_callback_query(call.id, text="❌ العفو، هذا الملف غير موجود أو تم حذفه مؤخراً.")
 
-# --- 2. لوحة تحكم الإدارة الكاملة والمطورة والآمنة ---
+# --- 2. لوحة تحكم الإدارة الكاملة ---
 
 @bot.message_handler(func=lambda m: m.text == "لوحة تحكم الإدارة ⚙️")
 def admin_panel(message):
@@ -238,7 +233,7 @@ def admin_panel(message):
     markup.add("📊 إحصائيات التحميل", "🔧 تفعيل/إلغاء الصيانة")
     markup.add("رجوع للبداية 🏠")
     
-    bot.send_message(message.chat.id, "⚙️ مرحباً بك في غرفة التحكم المتقدمة للجنة العلمية. اختر الإجراء المطلوب:", reply_markup=markup)
+    bot.send_message(message.chat.id, "⚙️ مرحباً بك في غرفة التحكم المتقدمة. اختر الإجراء المطلوب:", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "🔧 تفعيل/إلغاء الصيانة" and is_admin(m.from_user.id))
 def toggle_maintenance(message):
@@ -249,6 +244,10 @@ def toggle_maintenance(message):
     MAINTENANCE_MODE = not MAINTENANCE_MODE
     status = "🔴 (مفعّل الآن - البوت مغلق للطلاب)" if MAINTENANCE_MODE else "🟢 (معطل الآن - البوت متاح للجميع)"
     bot.reply_to(message, f"🛠️ وضع الصيانة الحالي للبوت: {status}")
+
+# ========================================================
+# --- آلية الرفع المتعدد الجديدة (Bulk Upload) -----------
+# ========================================================
 
 @bot.message_handler(func=lambda m: m.text == "📥 رفع وتحويل الملفات للقسم" and is_admin(m.from_user.id))
 def start_upload_flow(message):
@@ -277,31 +276,75 @@ def upload_step_section(message, level, semester):
     course = message.text
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("قسم المحاضرات 🟢", "قسم التمارين 🧪", "قسم النماذج 📝")
-    msg = bot.send_message(message.chat.id, "اختر القسم الدقيق للرفع وحفظ التوجيه:", reply_markup=markup)
-    bot.register_next_step_handler(msg, upload_step_get_file, level, semester, course)
+    msg = bot.send_message(message.chat.id, "اختر القسم الدقيق لحفظ الملفات فيه:", reply_markup=markup)
+    bot.register_next_step_handler(msg, upload_step_open_mode, level, semester, course)
 
-def upload_step_get_file(message, level, semester, course):
+def upload_step_open_mode(message, level, semester, course):
     section = message.text
-    msg = bot.send_message(message.chat.id, "📥 حسناً! الآن قم بعمل **تحويل (Forward)** لأي ملف أو محاضرة من القناة إلى هنا مباشرة، أو قم برفع الملف هنا وسأقوم بحفظه تلقائياً في التبويب المناسب:")
-    bot.register_next_step_handler(msg, upload_process_final, level, semester, course, section)
+    uid = message.from_user.id
+    
+    # تفعيل "وضع الرفع" في ذاكرة البوت للمشرف الحالي
+    USER_STATE[uid] = {
+        "action": "uploading",
+        "level": level,
+        "semester": semester,
+        "course": course,
+        "section": section
+    }
+    
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add("✅ إنهاء الرفع")
+    
+    text = f"📥 **تم فتح وضع الرفع المتعدد للقسم:**\n({section})\n\n" \
+           f"قم الآن بتحديد **كل الملفات** من القناة وعمل تحويل (Forward) لها دفعة واحدة إلى هنا، أو ارفعها معاً.\n\n" \
+           f"⚠️ **عندما تنتهي من إرسال كل شيء، اضغط على زر '✅ إنهاء الرفع' في الأسفل لتأمين وحفظ الملفات.**"
+           
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
-def upload_process_final(message, level, semester, course, section):
-    if message.document:
-        file_id = message.document.file_id
-        file_name = message.document.file_name
+# التقاط أي ملف يتم إرساله إذا كان المشرف في وضع "الرفع المتعدد"
+@bot.message_handler(content_types=['document', 'photo', 'video', 'audio'])
+def handle_bulk_files(message):
+    uid = message.from_user.id
+    if not is_admin(uid): return
+    
+    if uid in USER_STATE and USER_STATE[uid].get("action") == "uploading":
+        state = USER_STATE[uid]
         
+        # استخراج البيانات حسب نوع الملف
+        if message.document:
+            file_id = message.document.file_id
+            file_name = message.document.file_name or "ملف_بدون_اسم"
+        elif message.video:
+            file_id = message.video.file_id
+            file_name = message.video.file_name or f"فيديو_{message.message_id}.mp4"
+        else:
+            bot.reply_to(message, "⚠️ يرجى رفع ملفات بصيغة (مستندات Documents) أو فيديو.")
+            return
+            
+        # الحفظ السريع في قاعدة البيانات
         conn = sqlite3.connect("committee.db")
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO files (level, semester, course, section, file_name, file_id) 
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (level, semester, course, section, file_name, file_id))
+        """, (state['level'], state['semester'], state['course'], state['section'], file_name, file_id))
         conn.commit()
         conn.close()
         
-        bot.send_message(message.chat.id, f"✅ تم حفظ وحفظ المعرف الخاص بالملف بنجاح!\n📋 الاسم المعتمد: {file_name}\n📂 القسم الدراسي: {section}", reply_markup=main_menu())
-    else:
-        bot.send_message(message.chat.id, "❌ خطأ، لم تقم بإرسال أو تحويل ملف مستند (Document)، يرجى إعادة الإجراء بشكل صحيح عبر لوحة التحكم.", reply_markup=main_menu())
+        # رد سريع لكل ملف يتم التقاطه
+        bot.reply_to(message, f"✅ تم الالتقاط والحفظ: {file_name}")
+
+# إغلاق وضع الرفع المتعدد عند الانتهاء
+@bot.message_handler(func=lambda m: m.text == "✅ إنهاء الرفع" and is_admin(m.from_user.id))
+def finish_bulk_upload(message):
+    uid = message.from_user.id
+    if uid in USER_STATE and USER_STATE[uid].get("action") == "uploading":
+        USER_STATE[uid] = {} # مسح وضع الرفع من الذاكرة
+        
+        # إعادة المشرف للقائمة الرئيسية
+        bot.send_message(message.chat.id, "🎉 ممتاز! تم حفظ جميع الملفات التي أرسلتها في القسم المحدد بنجاح، وتم إغلاق وضع الرفع.", reply_markup=main_menu())
+
+# ========================================================
 
 @bot.message_handler(func=lambda m: m.text == "👤 إضافة مشرف جديد" and is_admin(m.from_user.id))
 def add_admin_flow(message):
