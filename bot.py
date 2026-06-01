@@ -1,11 +1,14 @@
 import telebot
 import json
 import os
-import sqlite3
 from flask import Flask
 from threading import Thread
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# المكتبة الخاصة بالاتصال بـ PostgreSQL
+import psycopg2
+from psycopg2.extras import DictCursor
 
 # --- إعداد خادم الويب للعمل مجاناً على Render ---
 app = Flask('')
@@ -25,6 +28,8 @@ def keep_alive():
 
 # إعداد البوت والجدولة
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL") # جلب رابط قاعدة البيانات من بيئة التشغيل
+
 bot = telebot.TeleBot(BOT_TOKEN)
 scheduler = BackgroundScheduler()
 scheduler.start()
@@ -47,20 +52,27 @@ COURSES_STRUCTURE = {
     }
 }
 
-# --- إعداد وإنشاء قاعدة البيانات المدمجة ---
+# دالة مساعدة لإنشاء الاتصال بالقاعدة والتعامل مع الإغلاق التلقائي
+def get_db_connection():
+    # يتصل برابط PostgreSQL المأخوذ من الـ Environment Variables
+    return psycopg2.connect(DATABASE_URL)
+
+# --- إعداد وإنشاء جداول PostgreSQL ---
 def init_db():
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # في PostgreSQL نستخدم SERIAL بدلاً من AUTOINCREMENT
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admins (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             role TEXT DEFAULT 'admin'
         )
     """)
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY)")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             level TEXT,
             semester TEXT,
             course TEXT,
@@ -70,19 +82,30 @@ def init_db():
             downloads_count INTEGER DEFAULT 0
         )
     """)
-    cursor.execute("INSERT OR IGNORE INTO admins (user_id, role) VALUES (?, 'super_admin')", (OWNER_ID,))
+    
+    # في PostgreSQL نستخدم ON CONFLICT بدلاً من INSERT OR IGNORE
+    cursor.execute("""
+        INSERT INTO admins (user_id, role) 
+        VALUES (%s, 'super_admin') 
+        ON CONFLICT (user_id) DO NOTHING
+    """, (OWNER_ID,))
+    
     conn.commit()
+    cursor.close()
     conn.close()
 
 init_db()
 
 # --- دالات فحص الصلاحيات والبيانات ---
 def is_admin(user_id):
-    if user_id == OWNER_ID: return True
-    conn = sqlite3.connect("committee.db")
+    if user_id == OWNER_ID: 
+        return True
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
+    # نستخدم %s كعلامة حجز للمتغيرات في PostgreSQL بدلاً من ?
+    cursor.execute("SELECT 1 FROM admins WHERE user_id = %s", (user_id,))
     res = cursor.fetchone()
+    cursor.close()
     conn.close()
     return res is not None
 
@@ -94,10 +117,11 @@ def check_status(message):
     return True
 
 def register_student(user_id):
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
     conn.commit()
+    cursor.close()
     conn.close()
 
 # --- لوحات المفاتيح ---
@@ -105,7 +129,6 @@ def main_menu(user_id):
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("المستوى الأول 📕", "المستوى الثاني 📗")
     
-    # الزر يظهر للمشرفين فقط
     if is_admin(user_id):
         markup.add("لوحة تحكم الإدارة ⚙️", "التواصل مع المطور 👨‍💻")
     else:
@@ -117,7 +140,8 @@ def main_menu(user_id):
 
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
-    if not check_status(message): return
+    if not check_status(message): 
+        return
     uid = message.from_user.id
     register_student(uid)
     if uid in USER_STATE:
@@ -127,7 +151,8 @@ def start_cmd(message):
 
 @bot.message_handler(func=lambda m: m.text in ["المستوى الأول 📕", "المستوى الثاني 📗", "رجوع للبداية 🏠"])
 def handle_levels(message):
-    if not check_status(message): return
+    if not check_status(message): 
+        return
     uid = message.from_user.id
     if message.text == "رجوع للبداية 🏠":
         bot.send_message(message.chat.id, "تم العودة للقائمة الرئيسية", reply_markup=main_menu(uid))
@@ -143,9 +168,11 @@ def handle_levels(message):
 
 @bot.message_handler(func=lambda m: m.text in ["الفصل الدراسي الأول 📘", "الفصل الدراسي الثاني 📗"])
 def handle_semesters(message):
-    if not check_status(message): return
+    if not check_status(message): 
+        return
     uid = message.from_user.id
-    if uid not in USER_STATE: return
+    if uid not in USER_STATE: 
+        return
     
     semester = message.text
     USER_STATE[uid]["semester"] = semester
@@ -160,9 +187,11 @@ def handle_semesters(message):
 
 @bot.message_handler(func=lambda m: any(m.text in COURSES_STRUCTURE[lvl][sem] for lvl in COURSES_STRUCTURE for sem in COURSES_STRUCTURE[lvl]))
 def handle_courses(message):
-    if not check_status(message): return
+    if not check_status(message): 
+        return
     uid = message.from_user.id
-    if uid not in USER_STATE: return
+    if uid not in USER_STATE: 
+        return
     
     USER_STATE[uid]["course"] = message.text
     
@@ -172,25 +201,27 @@ def handle_courses(message):
     
     bot.send_message(message.chat.id, f"📖 مقرر: {message.text}\nاختر القسم الدراسي لعرض الملفات:", reply_markup=markup)
 
-# الإرسال المباشر للملفات كرسائل منفصلة
 @bot.message_handler(func=lambda m: m.text in ["قسم المحاضرات 🟢", "قسم التمارين 🧪", "قسم النماذج 📝"])
 def handle_sections(message):
-    if not check_status(message): return
+    if not check_status(message): 
+        return
     uid = message.from_user.id
-    if uid not in USER_STATE or "course" not in USER_STATE[uid]: return
+    if uid not in USER_STATE or "course" not in USER_STATE[uid]: 
+        return
     
     section = message.text
     state = USER_STATE[uid]
     
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, file_id, file_name FROM files 
-        WHERE level=? AND semester=? AND course=? AND section=?
+        WHERE level=%s AND semester=%s AND course=%s AND section=%s
     """, (state["level"], state["semester"], state["course"], section))
     files = cursor.fetchall()
     
     if not files:
+        cursor.close()
         conn.close()
         bot.send_message(message.chat.id, "📭 هذا القسم فارغ حالياً، لم يتم رفع أي ملفات هنا بعد.")
         return
@@ -200,12 +231,12 @@ def handle_sections(message):
     for file_db_id, file_id, fname in files:
         try:
             bot.send_document(message.chat.id, file_id, caption=f"📄 {fname}\nاللجنة العلمية - قنوات الكلية")
-            # زيادة عداد التحميل مباشرة
-            cursor.execute("UPDATE files SET downloads_count = downloads_count + 1 WHERE id=?", (file_db_id,))
+            cursor.execute("UPDATE files SET downloads_count = downloads_count + 1 WHERE id=%s", (file_db_id,))
         except Exception as e:
             bot.send_message(message.chat.id, f"❌ حدثت مشكلة أثناء إرسال الملف: {fname}")
             
     conn.commit()
+    cursor.close()
     conn.close()
 
 # --- 2. لوحة تحكم الإدارة الكاملة المدمجة ---
@@ -213,7 +244,8 @@ def handle_sections(message):
 @bot.message_handler(func=lambda m: m.text in ["لوحة تحكم الإدارة ⚙️", "رجوع للوحة الإدارة 🔙"])
 def admin_panel(message):
     uid = message.from_user.id
-    if not is_admin(uid): return
+    if not is_admin(uid): 
+        return
     
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("📥 رفع وتحويل الملفات للقسم", "🗑️ الحذف")
@@ -223,7 +255,6 @@ def admin_panel(message):
     
     bot.send_message(message.chat.id, "⚙️ مرحباً بك في غرفة التحكم المتقدمة. اختر الإجراء المطلوب:", reply_markup=markup)
 
-# القوائم الفرعية للوحة الإدارة
 @bot.message_handler(func=lambda m: m.text == "🗑️ الحذف" and is_admin(m.from_user.id))
 def admin_delete_menu(message):
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -275,7 +306,8 @@ def start_upload_flow(message):
     bot.register_next_step_handler(msg, upload_step_semester)
 
 def upload_step_semester(message):
-    if message.text == "رجوع للوحة الإدارة 🔙": return admin_panel(message)
+    if message.text == "رجوع للوحة الإدارة 🔙": 
+        return admin_panel(message)
     level = message.text
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("الفصل الدراسي الأول 📘", "الفصل الدراسي الثاني 📗")
@@ -321,7 +353,8 @@ def upload_step_open_mode(message, level, semester, course):
 @bot.message_handler(content_types=['document', 'photo', 'video', 'audio'])
 def handle_bulk_files(message):
     uid = message.from_user.id
-    if not is_admin(uid): return
+    if not is_admin(uid): 
+        return
     
     if uid in USER_STATE and USER_STATE[uid].get("action") == "uploading":
         state = USER_STATE[uid]
@@ -336,13 +369,14 @@ def handle_bulk_files(message):
             bot.reply_to(message, "⚠️ يرجى رفع ملفات بصيغة (مستندات Documents) أو فيديو.")
             return
             
-        conn = sqlite3.connect("committee.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO files (level, semester, course, section, file_name, file_id) 
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (state['level'], state['semester'], state['course'], state['section'], file_name, file_id))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.reply_to(message, f"✅ تم الالتقاط والحفظ: {file_name}")
 
@@ -366,13 +400,14 @@ def add_admin_flow(message):
 def process_add_admin(message):
     try:
         new_id = int(message.text)
-        conn = sqlite3.connect("committee.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO admins (user_id, role) VALUES (?, 'admin')", (new_id,))
+        cursor.execute("INSERT INTO admins (user_id, role) VALUES (%s, 'admin') ON CONFLICT (user_id) DO NOTHING", (new_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.reply_to(message, f"✅ تم إضافة المشرف ({new_id}) بنجاح.")
-    except:
+    except Exception as e:
         bot.reply_to(message, "❌ القيمة المدخلة غير صحيحة.")
 
 @bot.message_handler(func=lambda m: m.text == "حذف مشرف" and is_admin(m.from_user.id))
@@ -386,13 +421,14 @@ def process_remove_admin(message):
         if target_id == OWNER_ID:
             bot.reply_to(message, "❌ لا يمكن حذف المالك الأساسي للبوت.")
             return
-        conn = sqlite3.connect("committee.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM admins WHERE user_id = ?", (target_id,))
+        cursor.execute("DELETE FROM admins WHERE user_id = %s", (target_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.reply_to(message, f"🗑️ تم حذف المشرف بنجاح.")
-    except:
+    except Exception as e:
         bot.reply_to(message, "❌ القيمة المدخلة غير صحيحة.")
 
 @bot.message_handler(func=lambda m: m.text == "إضافة صلاحية لمشرف" and is_admin(m.from_user.id))
@@ -406,13 +442,15 @@ def add_privilege_flow(message):
 def process_add_privilege(message):
     try:
         target_id = int(message.text)
-        conn = sqlite3.connect("committee.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE admins SET role='super_admin' WHERE user_id=?", (target_id,))
+        cursor.execute("UPDATE admins SET role='super_admin' WHERE user_id=%s", (target_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.reply_to(message, f"⭐ تم ترقية المشرف ({target_id}) إلى مشرف متميز.")
-    except: pass
+    except Exception as e:
+        pass
 
 @bot.message_handler(func=lambda m: m.text == "سحب صلاحية من مشرف" and is_admin(m.from_user.id))
 def remove_privilege_flow(message):
@@ -425,13 +463,15 @@ def remove_privilege_flow(message):
 def process_remove_privilege(message):
     try:
         target_id = int(message.text)
-        conn = sqlite3.connect("committee.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE admins SET role='admin' WHERE user_id=?", (target_id,))
+        cursor.execute("UPDATE admins SET role='admin' WHERE user_id=%s", (target_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.reply_to(message, f"📉 تم سحب الصلاحيات الإضافية من ({target_id}).")
-    except: pass
+    except Exception as e:
+        pass
 
 # -- 2. دوال الحذف والملفات --
 @bot.message_handler(func=lambda m: m.text == "حذف ملف واحد" and is_admin(m.from_user.id))
@@ -441,10 +481,11 @@ def start_delete_file(message):
 
 def process_delete_file(message):
     fname = message.text
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM files WHERE file_name = ?", (fname,))
+    cursor.execute("DELETE FROM files WHERE file_name = %s", (fname,))
     conn.commit()
+    cursor.close()
     conn.close()
     bot.reply_to(message, f"🗑️ تم حذف أي ملف باسم '{fname}'.")
 
@@ -460,10 +501,11 @@ def process_move_file_step2(message):
 
 def process_move_file_final(message, fname):
     new_course = message.text
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE files SET course = ? WHERE file_name = ?", (new_course, fname))
+    cursor.execute("UPDATE files SET course = %s WHERE file_name = %s", (new_course, fname))
     conn.commit()
+    cursor.close()
     conn.close()
     bot.reply_to(message, f"🔀 تم نقل الملف بنجاح إلى '{new_course}'.")
 
@@ -479,23 +521,27 @@ def process_rename_file_step2(message):
 
 def process_rename_file_final(message, old_name):
     new_name = message.text
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE files SET file_name = ? WHERE file_name = ?", (new_name, old_name))
+    cursor.execute("UPDATE files SET file_name = %s WHERE file_name = %s", (new_name, old_name))
     conn.commit()
+    cursor.close()
     conn.close()
     bot.reply_to(message, f"✅ تم تغيير الاسم بنجاح إلى '{new_name}'.")
 
 # -- 3. دوال الإشعارات والإحصائيات --
 def send_broadcast_to_all(text):
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users")
     uids = cursor.fetchall()
+    cursor.close()
     conn.close()
     for u in uids:
-        try: bot.send_message(u[0], f"📢 **تنبيه وإشعار من اللجنة العلمية الطلابية:**\n\n{text}", parse_mode="Markdown")
-        except: pass
+        try: 
+            bot.send_message(u[0], f"📢 **تنبيه وإشعار من اللجنة العلمية الطلابية:**\n\n{text}", parse_mode="Markdown")
+        except Exception as e: 
+            pass
 
 @bot.message_handler(func=lambda m: m.text == "إرسال إشعار فوري" and is_admin(m.from_user.id))
 def admin_broadcast_now(message):
@@ -522,12 +568,13 @@ def process_broadcast_schedule_final(message, text):
 
 @bot.message_handler(func=lambda m: m.text == "📊 إحصائيات التحميل" and is_admin(m.from_user.id))
 def show_real_stats(message):
-    conn = sqlite3.connect("committee.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT file_name, downloads_count FROM files ORDER BY downloads_count DESC LIMIT 5")
     rows = cursor.fetchall()
     cursor.execute("SELECT COUNT(*) FROM users")
     total_students = cursor.fetchone()[0]
+    cursor.close()
     conn.close()
     
     stats_text = f"📊 **الإحصائيات:**\n👥 المشتركين: {total_students}\n\n🔝 **أكثر 5 ملفات تحميلاً:**\n"
@@ -538,5 +585,5 @@ def show_real_stats(message):
 # تشغيل وتجهيز المشروع
 if __name__ == "__main__":
     keep_alive()
-    print("البوت الأكاديمي يعمل الآن بالكود الجديد...")
+    print("البوت الأكاديمي يعمل الآن بالكود الجديد المتوافق مع PostgreSQL...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
